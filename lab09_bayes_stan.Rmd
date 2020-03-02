@@ -1,0 +1,133 @@
+---
+title: "Stat 343 Bayes Practice with Stan"
+output:
+  pdf_document:
+    keep_tex: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(readr)
+library(ggplot2)
+```
+
+\newcommand{\simiid}{{\mathrel {\mathop {\sim}\limits _{}^{\rm iid}}\,}}
+
+# Earthquakes
+
+This example is taken from Chihara and Hesterberg.  Here's a quote from them:
+
+> "The Weibull distribution has been used to model the time between successive earthquakes (Hasumi et al (2009); Tiampo et al. (2008)). The data set `quakes` contains the time between earthquakes (in days) for all earthquakes of magnitude 6 or greater from 1970 through 2009 (from http://earthquake.usgs.gov/earthquakes/eqarchives/)."
+
+The R code below reads the data in and makes an initial plot:
+
+```{r, message = FALSE}
+library(tidyverse)
+library(rstan)
+rstan_options(auto_write = TRUE)
+
+quakes <- read_csv("http://www.evanlray.com/data/chihara_hesterberg/Quakes.csv")
+
+ggplot(data = quakes, mapping = aes(x = TimeDiff)) +
+  geom_histogram(mapping = aes(y = ..density..))
+```
+
+We have previously estimated the parameters of a Weibull model for wind speeds via Maximum Likelihood Estimation; recall that we had to do this via numerical optimization.  Let's fit a Weibull distribution to the earthquake timing data, but using a Bayesian approach and MCMC this time.  There is no conjugate prior for the Weibull distribution when both parameters are unknown.
+
+So, we'll use the model
+
+$X_i \simiid \text{Weibull}(k, \lambda)$,
+
+where $X_i$ is the $i$th observed time between consecutive earthquakes.
+
+The Weibull distribution has two parameters, the shape parameter $k > 0$ and the scale parameter $\lambda > 0$.  If $X \sim \text{Weibull}(k, \lambda)$, then it has pdf
+$$f(x | k, \lambda) = \frac{k x^{k - 1}}{\lambda^k}e^{-(x/\lambda)^k}$$
+
+In R, the density function can be evaluated with the `dweibull` function, which has the following arguments:
+
+* `x`: vector of values at which to evaluate the pdf.
+* `shape`, `scale`: shape and scale parameters, the latter defaulting to 1.
+* `log`: logical; if TRUE, returns the log of the pdf.
+
+#### 1. Set up model definition in stan
+
+I have set up a skeleton of the stan file, included in this repository.  Edit that file now to add necessary declarations and model statements for this model to the data, parameters, and model blocks.  The stan function to use for the Weibull distribution is called `weibull`.  Use Exponential(0.01) priors for both k and lambda.  These are flat priors.
+
+#### 2. Perform estimation
+
+You will need to load the rstan package, set up a list with the data for the stan model, and call `stan` to compile the model and perform sampling.
+
+```{r}
+fit <- stan(
+  file = "earthquakes_model.stan",
+  data = list(n = nrow(quakes), x = quakes$TimeDiff),
+  iter = 1000,
+  chains = 4,
+  seed = 76732
+)
+```
+
+#### 3. Plot results
+
+Make some exploratory plots of the results.  It would be nice to have:
+
+ * a scatterplot of the posterior samples, showing both parameters for each sample from the posterior
+ * histograms or density plots summarizing the marginal posterior distribution for each model parameter.
+
+```{r}
+posterior_samples <- as.data.frame(fit)
+ggplot(data = posterior_samples, mapping = aes(x = k, y = lambda)) +
+  geom_point()
+
+ggplot(data = posterior_samples, mapping = aes(x = k)) +
+  geom_density()
+
+ggplot(data = posterior_samples, mapping = aes(x = lambda)) +
+  geom_density()
+```
+
+#### 4. Find posterior means and credible intervals
+
+Obtain approximate posterior means and 95% posterior credible intervals for each model parameter.
+
+```{r}
+mean(posterior_samples$k)
+quantile(x = posterior_samples$k, probs = c(0.025, 0.975))
+
+mean(posterior_samples$lambda)
+quantile(x = posterior_samples$lambda, probs = c(0.025, 0.975))
+```
+
+#### 5. What is your effective sample size for each parameter?
+
+```{r}
+summary(fit)
+```
+
+The effective sample sizes are about 1265 for k and 1141 for lambda.
+
+Because of dependence in Markov chain sampling, we don't really have 2000 independent samples from the posterior.
+
+#### 6. Add three new layers to the data plot below: 1) a Weibull density using the posterior mean parameter values; 2) a Weibull density using the parameter values at the lower endpoints of the 95% credible intervals; and 3) a Weibull density using the parameter values at the upper endpoints of the 95% credible intervals.
+
+```{r}
+ggplot(data = quakes, mapping = aes(x = TimeDiff)) +
+  geom_histogram(mapping = aes(y = ..density..), boundary = 0) +
+  stat_function(
+    fun = dweibull,
+    args = list(shape = mean(posterior_samples$k),
+                scale = mean(posterior_samples$lambda))) +
+  stat_function(
+    fun = dweibull,
+    args = list(shape = quantile(x = posterior_samples$k, probs = 0.025),
+                scale = quantile(x = posterior_samples$lambda, probs = 0.025))) +
+  stat_function(
+    fun = dweibull,
+    args = list(shape = quantile(x = posterior_samples$k, probs = 0.975),
+                scale = quantile(x = posterior_samples$lambda, probs = 0.975)))
+
+```
+
+
+
